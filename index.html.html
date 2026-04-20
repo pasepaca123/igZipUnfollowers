@@ -1,0 +1,136 @@
+
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">App para detectar quién no te sigue en Instagram</h2>
+
+<div class="py-6 px-2 max-w-2xl mx-auto">
+
+  <div class="mb-6">
+    <label id="lbl-zip" class="block cursor-pointer rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 transition-colors p-10 text-center">
+      <div class="flex flex-col items-center gap-2">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#E1306C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="20" height="20" rx="5"/>
+          <circle cx="12" cy="12" r="4"/>
+          <circle cx="17.5" cy="6.5" r="1" fill="#E1306C" stroke="none"/>
+        </svg>
+        <p id="lbl-text" class="text-sm font-medium text-gray-700">Sube tu archivo de Instagram</p>
+        <p class="text-xs text-gray-400">instagram-*.zip · Solo se procesa en tu navegador</p>
+        <span class="mt-2 inline-block px-4 py-1.5 rounded-full text-xs font-medium bg-pink-100 text-pink-700 border border-pink-200">Seleccionar archivo</span>
+      </div>
+      <input type="file" id="file-zip" accept=".zip" class="hidden">
+    </label>
+  </div>
+
+  <div id="error" class="hidden mb-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600"></div>
+
+  <div id="stats" class="hidden grid grid-cols-3 gap-3 mb-6"></div>
+
+  <div id="results-wrap" class="hidden">
+    <div class="flex items-center justify-between mb-3">
+      <p class="text-sm font-medium text-gray-700">No te siguen de vuelta</p>
+      <input type="text" id="search" placeholder="Buscar usuario..."
+        class="text-sm rounded-lg border border-gray-200 bg-white px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-pink-300 placeholder-gray-300">
+    </div>
+    <div id="list" class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));"></div>
+    <div id="empty" class="hidden text-center py-10 text-sm text-gray-400">No se encontraron resultados.</div>
+  </div>
+
+</div>
+
+<script>
+let unfollowers = [];
+
+function extractFollowers(data) {
+  const set = new Set();
+  if (!Array.isArray(data)) return set;
+  data.forEach(item => (item.string_list_data || []).forEach(s => { if (s.value) set.add(s.value); }));
+  return set;
+}
+
+function extractFollowing(data) {
+  const set = new Set();
+  const list = Array.isArray(data) ? data : (data.relationships_following || []);
+  list.forEach(item => {
+    if (item.title) set.add(item.title);
+    (item.string_list_data || []).forEach(s => { if (s.value) set.add(s.value); });
+  });
+  return set;
+}
+
+const colors = ['bg-pink-100 text-pink-800','bg-purple-100 text-purple-800','bg-blue-100 text-blue-800','bg-emerald-100 text-emerald-800','bg-amber-100 text-amber-800'];
+
+function statCard(label, value, extra) {
+  return `<div class="rounded-xl bg-white border border-gray-100 p-4 text-center ${extra}">
+    <p class="text-xs text-gray-400 mb-1">${label}</p>
+    <p class="text-2xl font-medium">${value}</p>
+  </div>`;
+}
+
+function userCard(u) {
+  const color = colors[u.charCodeAt(0) % colors.length];
+  return `<a href="https://instagram.com/${u}" target="_blank"
+    class="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 text-sm text-gray-700 hover:border-pink-300 hover:bg-pink-50 transition-colors no-underline overflow-hidden"
+    title="@${u}">
+    <span class="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium ${color}">${u[0].toUpperCase()}</span>
+    <span class="truncate text-xs">${u}</span>
+  </a>`;
+}
+
+function render(list) {
+  document.getElementById('list').innerHTML = list.map(userCard).join('');
+  document.getElementById('empty').classList.toggle('hidden', list.length > 0);
+}
+
+document.getElementById('search').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase();
+  render(q ? unfollowers.filter(u => u.toLowerCase().includes(q)) : unfollowers);
+});
+
+document.getElementById('file-zip').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  document.getElementById('error').classList.add('hidden');
+  document.getElementById('lbl-text').textContent = file.name;
+
+  try {
+    const zip = await JSZip.loadAsync(file);
+    const followerFile = Object.keys(zip.files).find(k => k.endsWith('followers_1.json'));
+    const followingFile = Object.keys(zip.files).find(k => k.endsWith('following.json'));
+
+    if (!followerFile || !followingFile) {
+      const el = document.getElementById('error');
+      el.classList.remove('hidden');
+      el.textContent = 'No se encontraron followers_1.json y following.json. Asegúrate de subir el ZIP de Instagram.';
+      return;
+    }
+
+    const [fText, fgText] = await Promise.all([
+      zip.files[followerFile].async('string'),
+      zip.files[followingFile].async('string')
+    ]);
+
+    const followers = extractFollowers(JSON.parse(fText));
+    const following = extractFollowing(JSON.parse(fgText));
+    unfollowers = [...following].filter(u => !followers.has(u)).sort();
+
+    const statsEl = document.getElementById('stats');
+    statsEl.classList.remove('hidden');
+    statsEl.innerHTML =
+      statCard('Sigues a', following.size, 'text-gray-700') +
+      statCard('Te siguen', followers.size, 'text-gray-700') +
+      statCard('No te siguen', unfollowers.length, 'text-red-500');
+
+    document.getElementById('results-wrap').classList.remove('hidden');
+    render(unfollowers);
+
+    document.getElementById('lbl-zip').classList.replace('border-gray-300', 'border-green-300');
+    document.getElementById('lbl-zip').classList.replace('bg-gray-50', 'bg-green-50');
+  } catch (err) {
+    const el = document.getElementById('error');
+    el.classList.remove('hidden');
+    el.textContent = 'Error al leer el archivo: ' + err.message;
+  }
+});
+</script>
